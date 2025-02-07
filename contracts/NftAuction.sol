@@ -7,7 +7,7 @@ contract NFTAuction {
     ERC721 public nftContract;
 
     struct Auction {
-        address seller;
+        address payable seller;
         uint256 tokenId;
         uint256 startPrice;
         uint256 endTime; // To be calculated from the duration
@@ -38,14 +38,82 @@ contract NFTAuction {
         uint256 _tokenId,
         uint256 _startPrice,
         uint256 _duration
-    ) external {}
+    ) external {
+        Auction storage auction = auctions[_tokenId];
+        require(nftContract.ownerOf(_tokenId) == msg.sender, "Not the owner");
+        require(
+            nftContract.getApproved(_tokenId) == address(this),
+            "Must be approved to transfer NFT"
+        );
+        require(auction.active == false, "Auction already active");
+
+        auctions[_tokenId] = Auction(
+            payable(msg.sender),
+            _tokenId,
+            _startPrice,
+            block.timestamp + _duration,
+            address(0),
+            0,
+            true
+        );
+
+        emit AuctionCreated(_tokenId, _startPrice, block.timestamp + _duration);
+    }
 
     // create bid
-    function placeBid(uint256 _tokenId) external payable {}
+    function placeBid(uint256 _tokenId) external payable {
+        Auction storage auction = auctions[_tokenId];
+        require(auction.active == true, "Auction not active");
+        require(block.timestamp < auction.endTime, "Auction ended");
+        require(msg.value > auction.higestBid, "Bid too low");
+        require(
+            msg.value >= auction.startPrice,
+            "Bid must be greater than start price"
+        );
+
+        if (auction.higestBid != 0) {
+            payable(auction.highestBidder).transfer(auction.higestBid);
+        }
+
+        auction.highestBidder = msg.sender;
+        auction.higestBid = msg.value;
+
+        emit BidPlaced(_tokenId, msg.sender, msg.value);
+    }
 
     // auction finalized
-    function finalizeAuction(uint256 _tokenId) external {}
+    function finalizeAuction(uint256 _tokenId) external {
+        Auction storage auction = auctions[_tokenId];
+        require(auction.active == true, "Auction not active");
+        require(block.timestamp >= auction.endTime, "Auction not ended");
+
+        auction.active = false;
+        nftContract.safeTransferFrom(
+            auction.seller,
+            auction.highestBidder,
+            _tokenId
+        );
+        auction.seller.transfer(auction.higestBid);
+
+        emit AuctionFinalized(
+            _tokenId,
+            auction.highestBidder,
+            auction.higestBid
+        );
+    }
 
     // auction cancelled
-    function cancelAuction(uint256 _tokenId) external {}
+    function cancelAuction(uint256 _tokenId) external {
+        Auction storage auction = auctions[_tokenId];
+        require(auction.active == true, "Auction not active");
+        require(nftContract.ownerOf(_tokenId) == msg.sender, "Not the owner");
+        require(block.timestamp < auction.endTime, "Auction ended");
+
+        auction.active = false;
+        if (auction.higestBid != 0) {
+            payable(auction.highestBidder).transfer(auction.higestBid);
+        }
+
+        emit AuctionCancelled(_tokenId);
+    }
 }
